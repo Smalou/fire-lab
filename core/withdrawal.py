@@ -1,0 +1,79 @@
+"""Decumulation (post-FIRE) experiments built on the shared life-cycle engine."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+import numpy as np
+
+from core.fire import build_plan
+from core.lifecycle import LifecyclePlan, LifecycleResult, run_lifecycle
+from core.models import RetirementRule, Scenario, WithdrawalSettings, WithdrawalStrategy
+
+STRATEGY_LABELS = {
+    WithdrawalStrategy.CONSTANT_REAL: "Stała realna wypłata",
+    WithdrawalStrategy.CONSTANT_PERCENT: "Stały % bieżącej wartości",
+    WithdrawalStrategy.GUARDRAILS: "Guardrails (Guyton–Klinger, uproszczone)",
+    WithdrawalStrategy.INCOME_ONLY: "Tylko dochód portfela (dywidendy/kupony)",
+}
+
+STRATEGY_HELP = {
+    WithdrawalStrategy.CONSTANT_REAL: "Kwota ustalana w chwili FIRE (np. 4% kapitału) i utrzymywana w stałej sile nabywczej. "
+    "Reguła 4% to szczególny przypadek tej metody ze stopą początkową 4%.",
+    WithdrawalStrategy.CONSTANT_PERCENT: "Co roku wypłacany jest stały procent bieżącej wartości portfela – portfel nie wyczerpie się, "
+    "ale wydatki wahają się razem z rynkiem.",
+    WithdrawalStrategy.GUARDRAILS: "Realna wypłata jest utrzymywana, dopóki bieżąca stopa wypłat mieści się w korytarzu "
+    "wokół stopy początkowej; po przekroczeniu górnej bariery wypłata jest cięta, po spadku poniżej dolnej – podnoszona. "
+    "Po roku ze stratą wypłata nie jest indeksowana inflacją.",
+    WithdrawalStrategy.INCOME_ONLY: "Wypłacane są wyłącznie dywidendy i kupony (stopa dochodu z rzeczywistych danych o wypłatach). "
+    "Kapitał nominalnie nie jest konsumowany.",
+}
+
+
+def decumulation_plan(s: Scenario, start_capital: float, expected_real_net_return: float) -> LifecyclePlan:
+    """Plan that starts at the FIRE age with a given capital and no contributions."""
+    full = build_plan(s, expected_real_net_return)
+    offset = (s.profile.fire_age - s.profile.current_age) * 12
+    n = full.n_months - offset
+    return replace(
+        full,
+        current_age=s.profile.fire_age,
+        n_months=n,
+        initial_capital=start_capital,
+        contributions=np.zeros(n),
+        events=full.events[offset:],
+        other_income=full.other_income[offset:],
+        barista_income=full.barista_income[offset:],
+        retirement_rule=RetirementRule.FIXED_AGE,
+        fire_month=0,
+        max_work_month=0,
+        coast_targets=None,
+    )
+
+
+def run_decumulation(
+    real_returns: np.ndarray,
+    s: Scenario,
+    start_capital: float,
+    ws: WithdrawalSettings,
+    expected_real_net_return: float,
+    income_yield: float | None = None,
+) -> LifecycleResult:
+    plan = decumulation_plan(s, start_capital, expected_real_net_return)
+    return run_lifecycle(real_returns[:, : plan.n_months], plan, ws, income_yield)
+
+
+def strategy_variants(base: WithdrawalSettings, income_available: bool) -> dict[str, WithdrawalSettings]:
+    """Comparable set of strategies sharing the base parameters (same random paths = CRN)."""
+    out = {
+        "Reguła 4% (stała realna, 4%)": base.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_REAL, "constant_basis": "rate", "initial_rate": 0.04}),
+        f"Stała realna ({base.initial_rate:.1%})".replace(".", ","): base.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_REAL, "constant_basis": "rate"}),
+        "Stała realna = wymagane wydatki": base.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_REAL, "constant_basis": "spending"}),
+        f"Stały % portfela ({base.percent_rate:.1%})".replace(".", ","): base.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_PERCENT}),
+        "Guardrails": base.model_copy(update={"strategy": WithdrawalStrategy.GUARDRAILS}),
+    }
+    if abs(base.initial_rate - 0.04) < 1e-12:  # identical to the 4% preset – avoid a duplicate line
+        out.pop(f"Stała realna ({base.initial_rate:.1%})".replace(".", ","))
+    if income_available:
+        out["Tylko dochód portfela"] = base.model_copy(update={"strategy": WithdrawalStrategy.INCOME_ONLY})
+    return out

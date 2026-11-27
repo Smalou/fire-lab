@@ -1,0 +1,44 @@
+[server]
+headless = true
+runOnSave = false
+maxUploadSize = 20
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = "full"
+
+[theme]
+primaryColor = "#0E9F9A"
+font = "sans-serif"
+baseRadius = "medium"
+showWidgetBorder = true
+chartCategoricalColors = ["#0E9F9A", "#1D4E89", "#5B8DD6", "#7A5EA8", "#6FA37A", "#C9A227", "#9AA5B1"]
+
+[theme.light]
+primaryColor = "#0E9F9A"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3F6F9"
+textColor = "#0B2545"
+redColor = "#D64545"
+orangeColor = "#F28C28"
+blueColor = "#1D4E89"
+greenColor = "#0E9F9A"
+
+[theme.light.sidebar]
+backgroundColor = "#F3F6F9"
+
+[theme.dark]
+primaryColor = "#2EC4B6"
+backgroundColor = "#0E1726"
+secondaryBackgroundColor = "#16233A"
+textColor = "#E6EDF5"
+redColor = "#FF6B6B"
+orangeColor = "#FFA94D"
+blueColor = "#74A9F0"
+greenColor = "#2EC4B6"
+
+[theme.dark.sidebar]
+backgroundColor = "#111C2E"
