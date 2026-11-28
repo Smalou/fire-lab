@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from core.accounts import AccountsPlan, net_value
 from core.models import RetirementRule, WithdrawalSettings, WithdrawalStrategy
 
 EPS = 1e-9
@@ -44,6 +45,7 @@ class LifecyclePlan:
     cash_real_monthly: float = 0.0  # real monthly return of the cash buffer
     fee_monthly: float = 0.0
     inflation_annual: float = 0.0
+    accounts: AccountsPlan | None = None  # household wrappers / metals / rent (None = single portfolio)
 
     @property
     def n_years(self) -> int:
@@ -67,6 +69,10 @@ class LifecycleResult:
     terminal_wealth: np.ndarray  # (P,) real wealth at horizon
     coast_month: np.ndarray  # (P,) month Coast number reached (-1 never / n.a.)
     plan: LifecyclePlan
+    illiquid_shortfall: np.ndarray | None = None  # (P,) shortfall while money was locked in IKE/IKZE/PPK/PPE
+    bucket_wealth: np.ndarray | None = None  # (P, 2+K, Y+1) net wealth per account at the start of each year
+    bucket_labels: list[str] | None = None
+    captured: dict | None = None  # gross state at ``capture_month`` (for starting a decumulation run)
 
     @property
     def n_paths(self) -> int:
@@ -86,10 +92,23 @@ def run_lifecycle(
     plan: LifecyclePlan,
     ws: WithdrawalSettings,
     income_yield: float | None = None,
+    gold_real_returns: np.ndarray | None = None,
+    record_buckets: bool = False,
+    capture_month: int | None = None,
 ) -> LifecycleResult:
-    """Simulate all paths at once. ``real_returns`` has shape (P, M)."""
+    """Simulate all paths at once. ``real_returns`` has shape (P, M).
+
+    ``gold_real_returns`` (P, M) values the physical-metals account; if missing
+    it follows the portfolio. With ``plan.accounts`` the household accounts are
+    simulated alongside the main portfolio (see ``core.accounts``).
+    """
     r = np.atleast_2d(np.asarray(real_returns, dtype=float))
     p, m_total = r.shape
+    ap = plan.accounts
+    k_acc = ap.n if ap is not None else 0
+    g = None
+    if ap is not None and ap.uses_gold.any():
+        g = r if gold_real_returns is None else np.atleast_2d(np.asarray(gold_real_returns, dtype=float))
     if m_total < plan.n_months:
         raise ValueError("Za krótka macierz stóp zwrotu względem horyzontu planu.")
     if ws.strategy == WithdrawalStrategy.INCOME_ONLY and (income_yield is None or not np.isfinite(income_yield)):
@@ -115,6 +134,33 @@ def run_lifecycle(
     init_rate = np.full(p, ws.initial_rate)
     trailing = np.zeros((p, 12))  # last 12 log real returns (ring buffer)
     total_w = np.zeros(p)
+    pi_m = (1.0 + plan.inflation_annual) ** (1.0 / 12.0) - 1.0
+
+    # household accounts ---------------------------------------------------------
+    main_gt = ap.main_gains_tax if ap is not None else 0.0
+    basis_v = np.full(p, float(ap.main_basis) if ap is not None else 0.0)
+    if k_acc:
+        x = np.tile(ap.initial, (p, 1))
+        bx = np.tile(ap.basis, (p, 1))
+        order = [k for k in ap.order() if not ap.is_ppk[k]]
+        ppk_start = np.full((p, k_acc), -1)
+        oki_sum = np.zeros((p, k_acc))
+    illiquid = np.zeros(p, dtype=bool)
+    captured = None
+    n_b = 2 + k_acc
+    buckets = np.empty((p, n_b, n_years + 1)) if record_buckets else None
+
+    def net_total() -> np.ndarray:
+        tot = v - main_gt * np.maximum(v - basis_v, 0.0) + cash
+        if k_acc:
+            tot = tot + net_value(x, bx, ap.gains_tax, ap.flat_tax, ap.sale_cost).sum(axis=1)
+        return tot
+
+    def snapshot(col: int) -> None:
+        buckets[:, 0, col] = v - main_gt * np.maximum(v - basis_v, 0.0)
+        buckets[:, 1, col] = cash
+        if k_acc:
+            buckets[:, 2:, col] = net_value(x, bx, ap.gains_tax, ap.flat_tax, ap.sale_cost)
 
     wealth_sy = np.empty((p, n_years + 1))
     cons_y = np.zeros((p, n_years))
@@ -124,9 +170,14 @@ def run_lifecycle(
 
     for m in range(plan.n_months):
         y = m // 12
+        if capture_month is not None and m == capture_month:
+            captured = {"v": v.copy(), "basis_v": basis_v.copy(), "cash": cash.copy(),
+                        "x": x.copy() if k_acc else None, "bx": bx.copy() if k_acc else None, "net": net_total()}
         if m % 12 == 0:
-            wealth_sy[:, y] = v + cash
-        total = v + cash
+            wealth_sy[:, y] = net_total()
+            if record_buckets:
+                snapshot(y)
+        total = net_total()
 
         # 1) retirement decision ------------------------------------------------
         acc = ~retired
@@ -144,7 +195,7 @@ def run_lifecycle(
                 v[trigger] -= moved
                 cash[trigger] += moved
             income_now = plan.other_income[m] + plan.barista_income[m]
-            start_value = v[trigger] + cash[trigger]
+            start_value = net_total()[trigger]
             if ws.strategy == WithdrawalStrategy.CONSTANT_REAL and ws.constant_basis == "spending":
                 target_cons[trigger] = plan.spending
             else:
@@ -153,25 +204,57 @@ def run_lifecycle(
         # 2) cash flows -----------------------------------------------------------
         acc = ~retired
         if plan.coast_targets is not None:
-            new_coast = acc & ~coast_hit & (v >= plan.coast_targets[m] - EPS)
+            new_coast = acc & ~coast_hit & (net_total() >= plan.coast_targets[m] - EPS)
             coast_hit |= new_coast
             coast_month[new_coast] = m
             contrib = np.where(acc & ~coast_hit, plan.contributions[m], 0.0)
         else:
             contrib = np.where(acc, plan.contributions[m], 0.0)
         v += contrib
+        basis_v += contrib
         contrib_y[:, y] += contrib
+        if ap is not None:
+            extra = np.where(acc, ap.main_extra[m], 0.0)
+            v += extra
+            basis_v += extra
+            contrib_y[:, y] += extra
+            if k_acc:
+                add = np.where(acc[:, None], ap.contributions[:, m][None, :], 0.0)
+                x += add
+                bx += add
+                contrib_y[:, y] += add.sum(axis=1)
         if plan.events[m] != 0.0:
             v += plan.events[m]
+            if plan.events[m] > 0:
+                basis_v += plan.events[m]
             neg = v < 0
             if neg.any():  # outflow larger than the portfolio: debt is not modelled
                 v[neg] = 0.0
+
+        # PPK payout: from the access age, once retired – 25% at once, 75% in 120 instalments (tax-free)
+        if k_acc and ap.is_ppk.any():
+            for k in np.flatnonzero(ap.is_ppk):
+                start_now = retired & (ppk_start[:, k] < 0) & (m >= ap.access_month[k])
+                if start_now.any():
+                    ppk_start[start_now, k] = m
+                    lump = 0.25 * x[start_now, k]
+                    x[start_now, k] -= lump
+                    v[start_now] += lump
+                    basis_v[start_now] += lump
+                paying = ppk_start[:, k] >= 0
+                if paying.any():
+                    left = np.maximum(120 - (m - ppk_start[:, k]), 1)
+                    inst = np.where(paying, x[:, k] / left, 0.0)
+                    x[:, k] -= inst
+                    v += inst
+                    basis_v += inst
 
         if retired.any():
             since = m - fire_month
             anniversary = retired & (since % 12 == 0)
             total = v + cash
             if anniversary.any():
+                total = net_total()
                 if ws.strategy == WithdrawalStrategy.CONSTANT_PERCENT:
                     budget[anniversary] = ws.percent_rate * total[anniversary] / 12.0
                 elif ws.strategy == WithdrawalStrategy.INCOME_ONLY:
@@ -201,21 +284,61 @@ def run_lifecycle(
             use_cash_first = (cash > 0) & (trailing.sum(axis=1) < 0)
             from_cash = np.where(use_cash_first, np.minimum(gross, cash), 0.0)
             rest = gross - from_cash
-            from_port = np.minimum(rest, v)
-            rest -= from_port
+            # main portfolio; Belka tax on the gain share of the sale (household mode)
+            if main_gt > 0:
+                gain_frac = np.where(v > EPS, np.clip(1.0 - basis_v / np.maximum(v, EPS), 0.0, 1.0), 0.0)
+                keep = 1.0 - main_gt * gain_frac
+                sold = np.minimum(rest / np.maximum(keep, EPS), v)
+                basis_v -= basis_v * np.where(v > EPS, sold / np.maximum(v, EPS), 0.0)
+                from_port = sold
+                rest -= sold * keep
+            else:
+                from_port = np.minimum(rest, v)
+                rest -= from_port
             extra_cash = np.minimum(rest, cash - from_cash)
             from_cash += extra_cash
-            paid_gross = from_cash + from_port
+            rest -= extra_cash
             cash -= from_cash
             v -= from_port
-            paid_net = paid_gross / tax_gross
+            # household accounts in order of tax efficiency (only once accessible)
+            if k_acc:
+                for k in order:
+                    need = retired & (rest > EPS)
+                    if not need.any():
+                        break
+                    accessible = m >= ap.access_month[k]
+                    if accessible:
+                        t_g = ap.gains_tax[k]
+                    elif np.isfinite(ap.early_gains_tax[k]):
+                        t_g = ap.early_gains_tax[k]
+                    else:
+                        continue
+                    xk, bk = x[:, k], bx[:, k]
+                    gain_frac = np.where(xk > EPS, np.clip(1.0 - bk / np.maximum(xk, EPS), 0.0, 1.0), 0.0)
+                    keep = np.maximum(1.0 - ap.flat_tax[k] - ap.sale_cost[k] - t_g * gain_frac, EPS)
+                    sold = np.where(need, np.minimum(rest / keep, xk), 0.0)
+                    bx[:, k] -= bk * np.where(xk > EPS, sold / np.maximum(xk, EPS), 0.0)
+                    x[:, k] -= sold
+                    rest -= sold * keep
+            paid_net_total = gross - np.maximum(rest, 0.0)  # in "gross of the generic withdrawal tax" units
+            paid_net = paid_net_total / tax_gross
             consumption = paid_net + income_now
             total_w += np.where(retired, paid_net, 0.0)
             wd_y[:, y] += np.where(retired, paid_net, 0.0)
             cons_y[:, y] += np.where(retired, consumption, 0.0)
             retired_months_y[:, y] += retired
-            shortfall |= retired & (consumption < floor - 1e-6)
-            newly_depleted = retired & ~depleted & (v + cash <= 1e-6) & (gross > 0)
+            short_now = retired & (consumption < floor - 1e-6)
+            shortfall |= short_now
+            if k_acc:
+                locked = np.zeros(p)
+                for k in range(k_acc):
+                    if m < ap.access_month[k] or ap.is_ppk[k]:
+                        locked += x[:, k]
+                illiquid |= short_now & (locked > 1.0)
+                remaining = v + cash + x.sum(axis=1)
+            else:
+                remaining = v + cash
+            newly_depleted = retired & ~depleted & (remaining <= 1e-6) & (gross > 0)
             depleted |= newly_depleted
             depletion_month[newly_depleted] = m
 
@@ -224,9 +347,32 @@ def run_lifecycle(
         v *= (1.0 + rm) * (1.0 - plan.fee_monthly)
         np.maximum(v, 0.0, out=v)
         cash *= 1.0 + plan.cash_real_monthly
+        if main_gt > 0:
+            basis_v /= 1.0 + pi_m  # nominal cost basis loses real value
+        if k_acc:
+            port_growth = (1.0 + rm) * (1.0 - plan.fee_monthly)
+            for k in range(k_acc):
+                if ap.uses_gold[k]:
+                    x[:, k] *= 1.0 + g[:, m]
+                else:
+                    x[:, k] *= port_growth if ap.pays_fee[k] else (1.0 + rm)
+            np.maximum(x, 0.0, out=x)
+            bx /= 1.0 + pi_m
+            if ap.is_oki.any():
+                oki_sum += np.where(ap.is_oki[None, :], x, 0.0)
+                if (m + 1) % 12 == 0:
+                    avg = oki_sum / 12.0
+                    q = ap.oki_qualifying
+                    base = np.maximum(q * avg - ap.oki_threshold, 0.0) + (1.0 - q) * avg
+                    tax = np.minimum(ap.oki_value_tax * base, x) * ap.is_oki[None, :]
+                    x -= tax
+                    bx = np.minimum(bx, x)
+                    oki_sum[:] = 0.0
         trailing[:, m % 12] = np.log1p(np.maximum(rm, -0.999999))
 
-    wealth_sy[:, n_years] = v + cash
+    wealth_sy[:, n_years] = net_total()
+    if record_buckets:
+        snapshot(n_years)
     full = retired_months_y == 12
     cons_full = np.where(full, cons_y, np.nan)
     return LifecycleResult(
@@ -239,9 +385,13 @@ def run_lifecycle(
         depletion_month=depletion_month,
         shortfall=shortfall,
         total_withdrawals=total_w,
-        terminal_wealth=v + cash,
+        terminal_wealth=wealth_sy[:, n_years].copy(),
         coast_month=coast_month,
         plan=plan,
+        illiquid_shortfall=illiquid,
+        bucket_wealth=buckets,
+        captured=captured,
+        bucket_labels=(["Portfel główny", "Bufor gotówkowy"] + (ap.labels if ap is not None else [])) if record_buckets else None,
     )
 
 
@@ -284,6 +434,7 @@ def summarize(res: LifecycleResult) -> dict[str, float]:
         "p_not_depleted": float(np.mean(~depleted)),
         "p_spending_covered": float(np.mean(retired & ~res.shortfall)),
         "p_success": float(np.mean(retired & ~depleted & ~res.shortfall)),
+        "p_illiquid_shortfall": float(np.mean(res.illiquid_shortfall)) if res.illiquid_shortfall is not None else 0.0,
         "median_terminal_wealth": float(np.median(res.terminal_wealth)),
         "median_total_withdrawals": float(np.median(res.total_withdrawals)),
         "median_consumption_vol": float(np.nanmedian(consumption_volatility(res.consumption_year)))

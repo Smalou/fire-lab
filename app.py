@@ -33,6 +33,7 @@ pages = {
     ],
     "Planowanie": [
         st.Page("views/planner.py", title="Planer FIRE", icon=ICONS["planner"], url_path="planer"),
+        st.Page("views/household.py", title="Majątek i konta", icon=ICONS["household"], url_path="majatek"),
         st.Page("views/portfolio_builder.py", title="Konstruktor portfela", icon=ICONS["portfolio"], url_path="portfel"),
     ],
     "Analizy": [

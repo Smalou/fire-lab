@@ -113,19 +113,20 @@ def apply_stress(nominal_returns: np.ndarray, stress_path: np.ndarray, start_mon
 # ------------------------------------------------------------------ sensitivity
 
 
-def _p(nominal, s: Scenario, real_net, income_yield):
+def _p(nominal, s: Scenario, real_net, income_yield, gold_nominal=None):
     plan = build_plan(s, real_net)
     real = deflate_returns(nominal[:, : plan.n_months], s.profile.inflation)
     ws = s.withdrawal
     if ws.strategy == "income_only" and income_yield is None:
         ws = ws.model_copy(update={"strategy": "constant_real"})
-    return summarize(run_lifecycle(real, plan, ws, income_yield))
+    gold = deflate_returns(gold_nominal[:, : plan.n_months], s.profile.inflation) if gold_nominal is not None else None
+    return summarize(run_lifecycle(real, plan, ws, income_yield, gold))
 
 
 def sensitivity_analysis(nominal_returns: np.ndarray, s: Scenario, real_net: float, income_yield: float | None = None,
-                         metric: str = "p_success") -> pd.DataFrame:
+                         metric: str = "p_success", gold_nominal: np.ndarray | None = None) -> pd.DataFrame:
     """One-at-a-time sensitivity with common random numbers (same paths for every variant)."""
-    base = _p(nominal_returns, s, real_net, income_yield)[metric]
+    base = _p(nominal_returns, s, real_net, income_yield, gold_nominal)[metric]
     prof = s.profile
 
     def with_profile(**kw):
@@ -157,12 +158,12 @@ def sensitivity_analysis(nominal_returns: np.ndarray, s: Scenario, real_net: flo
         if shift is not None:
             up = np.expm1(np.log1p(nominal_returns) + shift / 12)
             dn = np.expm1(np.log1p(nominal_returns) - shift / 12)
-            hi = _p(up, s, real_net + shift, income_yield)[metric]
-            lo = _p(dn, s, real_net - shift, income_yield)[metric]
+            hi = _p(up, s, real_net + shift, income_yield, gold_nominal)[metric]
+            lo = _p(dn, s, real_net - shift, income_yield, gold_nominal)[metric]
         else:
             try:
-                hi = _p(nominal_returns, better, real_net, income_yield)[metric]
-                lo = _p(nominal_returns, worse, real_net, income_yield)[metric]
+                hi = _p(nominal_returns, better, real_net, income_yield, gold_nominal)[metric]
+                lo = _p(nominal_returns, worse, real_net, income_yield, gold_nominal)[metric]
             except ValueError:
                 continue
         rows.append({"parametr": name, "korzystny": hi, "niekorzystny": lo, "bazowy": base})
@@ -174,7 +175,8 @@ def sensitivity_analysis(nominal_returns: np.ndarray, s: Scenario, real_net: flo
 
 
 def success_heatmap(nominal_returns: np.ndarray, s: Scenario, real_net: float, fire_ages: list[int],
-                    spending_multipliers: list[float], income_yield: float | None = None) -> dict[str, np.ndarray]:
+                    spending_multipliers: list[float], income_yield: float | None = None,
+                    gold_nominal: np.ndarray | None = None) -> dict[str, np.ndarray]:
     """P(success) and P(not depleted) on a grid FIRE age × post-FIRE spending (fixed retirement age)."""
     succ = np.full((len(spending_multipliers), len(fire_ages)), np.nan)
     keep = np.full_like(succ, np.nan)
@@ -188,7 +190,7 @@ def success_heatmap(nominal_returns: np.ndarray, s: Scenario, real_net: float, f
                     "fire": s.fire.model_copy(update={"retirement_rule": RetirementRule.FIXED_AGE,
                                                       "max_work_age": max(s.fire.max_work_age, age)}),
                 })
-                out = _p(nominal_returns, variant, real_net, income_yield)
+                out = _p(nominal_returns, variant, real_net, income_yield, gold_nominal)
             except ValueError:
                 continue
             succ[i, j] = out["p_success"]

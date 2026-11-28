@@ -11,7 +11,7 @@ from components.charts import cdf_chart, fan_chart, heatmap, histogram
 from components.formatting import fmt_age, fmt_money, fmt_num, fmt_pct, polish_frame
 from components.kpi import kpi
 from components.layout import context_guard, data_badge, page_header, stale_notice
-from components.theme import GREY, NAVY, ORANGE, RED, TEAL, style
+from components.theme import GREY, ICONS, NAVY, ORANGE, RED, TEAL, style
 from core.fire import build_plan
 from core.lifecycle import deflate_returns, run_lifecycle, summarize
 from core.models import RetirementRule, SimulationModel, WithdrawalStrategy
@@ -118,6 +118,19 @@ with c4:
     kpi("Ścieżki / model", f"{fmt_num(res['n_paths'])}", delta=f"{'bootstrap' if res['model'] == 'bootstrap' else 'parametryczny'} · ziarno {res['seed']}",
         delta_color="off")
 
+if s.household.enabled:
+    k1, k2 = st.columns([1, 3], vertical_alignment="center")
+    with k1:
+        kpi("P(luki płynnościowej)", fmt_pct(summ.get("p_illiquid_shortfall", 0.0), 1), icon=":material/lock_clock:",
+            help="Odsetek ścieżek, na których po FIRE zabrakło pieniędzy na wydatki, choć część majątku była zablokowana "
+                 "na IKE, IKZE, PPK lub PPE przed wiekiem dostępu.")
+    with k2:
+        st.markdown("Majątek liczony **po podatkach** (Belka, IKZE 10%, OKI, spread kruszców) z blokadami wieku dostępu "
+                    "do kont emerytalnych.")
+        st.page_link("views/household.py", label="Szczegóły: Majątek i konta", icon=ICONS["household"])
+    for msg in res.get("capped", []):
+        st.caption(f":material/warning: {msg}")
+
 tabs = st.tabs([":material/ssid_chart: Wachlarz", ":material/bar_chart: Rozkłady", ":material/table: Percentyle",
                 ":material/grid_on: Mapa sukcesu", ":material/tune: Wrażliwość", ":material/bolt: Scenariusze kryzysowe"])
 
@@ -204,7 +217,7 @@ def heatmap_section() -> None:
         mults = [0.8, 0.9, 1.0, 1.1, 1.2]
         with st.spinner("Przeliczanie siatki scenariuszy…"):
             out = success_heatmap(res["nominal_subset"], s, ctx.stats["geometric_real_net"], ages, mults,
-                                  analytics.income_yield_or_none(ctx))
+                                  analytics.income_yield_or_none(ctx), res.get("gold_nominal_subset"))
         data = {"ages": ages, "mults": mults, **out}
         state.store_result(s, "montecarlo", data, ":heatmap")
         fresh_h = True
@@ -227,7 +240,7 @@ def sensitivity_section() -> None:
     if st.button("Uruchom analizę wrażliwości", icon=":material/tune:", key="sens_run"):
         with st.spinner("Przeliczanie wariantów…"):
             df = sensitivity_analysis(res["nominal_subset"], s, ctx.stats["geometric_real_net"],
-                                      analytics.income_yield_or_none(ctx), metric)
+                                      analytics.income_yield_or_none(ctx), metric, res.get("gold_nominal_subset"))
         data = {"df": df, "metric": metric}
         state.store_result(s, "montecarlo", data, ":sens")
         fresh_s = True
@@ -288,8 +301,10 @@ def stress_section() -> None:
         inc = analytics.income_yield_or_none(ctx)
         if ws.strategy == WithdrawalStrategy.INCOME_ONLY and inc is None:
             ws = ws.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_REAL})
-        before = summarize(run_lifecycle(deflate_returns(base_n[:, : plan.n_months], s.profile.inflation), plan, ws, inc))
-        after = summarize(run_lifecycle(deflate_returns(stressed[:, : plan.n_months], s.profile.inflation), plan, ws, inc))
+        gn = res.get("gold_nominal_subset")
+        gold = deflate_returns(gn[:, : plan.n_months], s.profile.inflation) if gn is not None else None
+        before = summarize(run_lifecycle(deflate_returns(base_n[:, : plan.n_months], s.profile.inflation), plan, ws, inc, gold))
+        after = summarize(run_lifecycle(deflate_returns(stressed[:, : plan.n_months], s.profile.inflation), plan, ws, inc, gold))
         rows = [("P(utrzymania kapitału)", before["p_not_depleted"], after["p_not_depleted"]),
                 ("P(pokrycia wydatków)", before["p_spending_covered"], after["p_spending_covered"]),
                 ("P(sukcesu planu)", before["p_success"], after["p_success"])]

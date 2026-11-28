@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from core.models import (
     SCHEMA_VERSION,
     FireSettings,
+    HouseholdSettings,
     IncomeSource,
     InvestorProfile,
     MarketSettings,
@@ -59,7 +60,30 @@ def default_scenarios() -> list[Scenario]:
         market=MarketSettings(data_source="demo", benchmark="SYN_GLOBAL"),
         withdrawal=WithdrawalSettings(initial_rate=0.035),
     )
-    return [balanced, aggressive, conservative]
+    household = Scenario(
+        name="Rodzina z kontami",
+        description="Para 35/34 lata: IKE, IKZE, PPK, kruszce i mieszkanie na wynajem; wspólny FIRE w wieku 52 lat.",
+        profile=InvestorProfile(current_age=35, fire_age=52, initial_capital=120_000, monthly_net_income=18_000,
+                                monthly_expenses=11_000, monthly_contribution=3_000, retirement_monthly_expenses=9_500),
+        fire=FireSettings(swr=0.04, incomes=[IncomeSource(name="Emerytura publiczna", monthly_amount=2_500, start_age=65),
+                                             IncomeSource(name="Emerytura małżonka", monthly_amount=2_200, start_age=66)]),
+        portfolio=_portfolio(catalog.default_portfolio("demo")),
+        market=MarketSettings(data_source="demo", benchmark="SYN_GLOBAL"),
+        household=HouseholdSettings.model_validate({
+            "enabled": True, "joint_planning": True, "spouse_age": 34, "main_account_basis_share": 0.8,
+            "accounts": [
+                {"kind": "ike", "owner": "self", "balance": 60_000, "monthly_own": 1_500},
+                {"kind": "ikze", "owner": "self", "balance": 20_000, "monthly_own": 942},
+                {"kind": "ppk", "owner": "self", "balance": 25_000, "monthly_own": 160, "monthly_employer": 120},
+                {"kind": "ike", "owner": "spouse", "balance": 30_000, "monthly_own": 800},
+                {"kind": "ppk", "owner": "spouse", "balance": 15_000, "monthly_own": 120, "monthly_employer": 90},
+            ],
+            "metals": {"value": 40_000, "monthly_purchase": 200},
+            "rental": {"enabled": True, "monthly_gross": 2_800, "monthly_costs": 300, "vacancy_rate": 0.05, "tax_rate": 0.085,
+                       "start_age": 35, "reinvest_share": 1.0},
+        }),
+    )
+    return [balanced, aggressive, conservative, household]
 
 
 def clone(s: Scenario, name: str | None = None) -> Scenario:

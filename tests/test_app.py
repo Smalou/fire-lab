@@ -6,7 +6,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
-PAGES = ["views/command_center.py", "views/planner.py", "views/portfolio_builder.py", "views/strategy_lab.py",
+PAGES = ["views/command_center.py", "views/planner.py", "views/household.py", "views/portfolio_builder.py", "views/strategy_lab.py",
          "views/risk_lab.py", "views/post_fire.py", "views/scenarios.py", "views/methodology.py"]
 
 
@@ -93,3 +93,20 @@ def test_scenario_clone_and_export(app):
     n = len(app.session_state["scenarios"])
     _ok(_click(app, "Klonuj"))
     assert len(app.session_state["scenarios"]) == n + 1
+
+
+def test_household_scenario_end_to_end():
+    at = AppTest.from_file(APP, default_timeout=300).run()
+    box = next(x for x in at.selectbox if x.label == "Aktywny scenariusz")
+    assert "Rodzina z kontami" in box.options[3]
+    box.select_index(3).run()
+    at.switch_page("views/household.py").run()
+    _ok(at)
+    labels = [m.label for m in at.metric]
+    assert "Pomost do odblokowania kont" in labels and "Majątek netto dziś" in labels
+    at.switch_page("views/risk_lab.py").run()
+    _ok(_click(at, "Uruchom symulację Monte Carlo"))
+    vals = {m.label: m.value for m in at.metric}
+    assert "P(luki płynnościowej)" in vals
+    at.switch_page("views/post_fire.py").run()
+    _ok(_click(at, "Zapisz i porównaj strategie"))

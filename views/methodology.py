@@ -9,7 +9,7 @@ from components.layout import page_header
 page_header("Metodologia", "Podstawy teoretyczne, definicje wskaźników, założenia modeli i ich ograniczenia.")
 
 tabs = st.tabs(["FIRE", "Markowitz i CAPM", "Wskaźniki", "Optymalizacja", "Backtesting", "Monte Carlo i ryzyko",
-                "Dekumulacja", "Ograniczenia", "Dane i literatura"])
+                "Dekumulacja", "Ograniczenia", "Dane i literatura", "Konta i podatki (PL)"])
 
 with tabs[0]:
     st.markdown("""
@@ -192,4 +192,46 @@ with tabs[8]:
 - Robin, V., Dominguez, J. (1992). *Your Money or Your Life*. Viking.
 - Bodie, Z., Kane, A., Marcus, A. J. *Investments*. McGraw-Hill (wydania kolejne).
 - Elton, E. J., Gruber, M. J., Brown, S. J., Goetzmann, W. N. *Modern Portfolio Theory and Investment Analysis*. Wiley (wydania kolejne).
+""")
+
+with tabs[9]:
+    st.markdown("""
+Po włączeniu strony **Majątek i konta** silnik cyklu życia prowadzi osobne „kubełki” majątku: portfel główny, bufor gotówkowy,
+rachunki opodatkowane, IKE, IKZE, PPK, PPE, OKI i metale szlachetne. Wszystkie konta poza kruszcami inwestują w portfel scenariusza
+(ta sama stopa zwrotu i koszty), kruszce – zgodnie z ceną złota (wspólna symulacja z portfelem, więc korelacja jest zachowana).
+Cel FIRE porównywany jest z **majątkiem netto po podatkach należnych przy wypłacie**.
+
+| Konto | Dostęp | Podatek przy wypłacie | Uwagi (stan prawny 2026) |
+|---|---|---|---|
+| Rachunek maklerski | zawsze | 19% od zysku nominalnego | podstawa w złotych nominalnych – inflacja jest opodatkowana |
+| IKE | od 60 lat | 0% | wcześniejszy zwrot możliwy (19% od zysku); limit 28 260 zł |
+| IKZE | od 65 lat | 10% od kwoty | wpłata obniża PIT; limit 11 304 zł (JDG 16 956 zł) |
+| PPK | od 60 lat | 0% | 25% jednorazowo + 75% w 120 ratach; dopłata roczna 240 zł |
+| PPE | od 60 lat | 0% | składka pracodawcy do 7% wynagrodzenia |
+| OKI | zawsze (od 2027) | brak podatku Belki | podatek od wartości 0,85% (2027) od średniej ponad 100 000 zł |
+| Kruszce | zawsze | 0% po 6 mies. | sprzedaż po cenie skupu (spread) |
+""")
+    st.markdown("**Podatek Belki przy częściowej sprzedaży** – zysk przypada na sprzedawaną część proporcjonalnie (metoda średniej "
+                "ceny nabycia), a podstawa kosztowa w ujęciu realnym maleje z inflacją:")
+    st.latex(r"N = G\left(1 - \tau\,\max\!\left(1-\tfrac{B_t}{V_t},0\right)\right),\qquad B_{t+1}=\frac{B_t\,(1-G/V_t)}{1+\pi_m}")
+    st.markdown("**OKI** – roczny podatek od średniej wartości aktywów; kwota wolna dotyczy tylko udziału *q* aktywów kwalifikowanych:")
+    st.latex(r"T_{OKI} = \tau_{OKI}\left[\max(q\,\bar V - K, 0) + (1-q)\,\bar V\right]")
+    st.markdown("""
+**Kolejność wypłat:** bufor gotówkowy (po roku ze stratą) → portfel główny → gotówka → rachunki opodatkowane → OKI → kruszce →
+IKE → PPE → IKZE. PPK jest wypłacane automatycznie do portfela głównego od 60. roku życia (o ile nastąpiło już FIRE).
+Przed wiekiem dostępu – jeśli dopuszczono – IKE służy jako ostateczne źródło (zwrot z podatkiem od zysku).
+
+**Luka płynnościowa** – zdarzenie, w którym po FIRE wydatki nie są pokryte (poniżej minimalnego poziomu), choć część majątku jest
+zablokowana na kontach emerytalnych. Jej prawdopodobieństwo w Monte Carlo pokazuje Laboratorium ryzyka. To kluczowe dla pytania
+badawczego: strategia optymalna w akumulacji (maksymalizacja ulg podatkowych IKE/IKZE/PPK) może nie być optymalna po FIRE przed 60. r.ż.
+
+**Uproszczenia:** składka pracodawcy do PPK/PPE nie zwiększa PIT pracownika; limity IKE/IKZE i kwota wolna OKI są stałe realnie
+(ustawa o OKI: 100 000 zł stałe do 2029 r., później indeksowane); OKI – średnia z wartości na koniec miesięcy; wynajem to stały
+realny dochód netto (ryczałt, pustostany, koszty) – wartość nieruchomości nie jest częścią kapitału FIRE; oboje małżonkowie przechodzą
+na FIRE jednocześnie; nie modelujemy wcześniejszej wypłaty z IKZE i PPK ani wypłaty transferowej.
+
+**Źródła:** ustawa z 20.04.2004 o indywidualnych kontach emerytalnych oraz indywidualnych kontach zabezpieczenia emerytalnego;
+ustawa z 4.10.2018 o pracowniczych planach kapitałowych; ustawa z 20.04.2004 o pracowniczych programach emerytalnych;
+ustawa z 3.07.2026 o osobistych kontach inwestycyjnych (Dz.U. 2026 poz. 1098); obwieszczenia MRPiPS o limitach wpłat na 2026 r.
+(M.P. 2025 poz. 1155, 1156); art. 10 ust. 1 pkt 8 i art. 30a ustawy o PIT.
 """)

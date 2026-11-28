@@ -30,16 +30,43 @@ STRATEGY_HELP = {
 }
 
 
-def decumulation_plan(s: Scenario, start_capital: float, expected_real_net_return: float) -> LifecyclePlan:
-    """Plan that starts at the FIRE age with a given capital and no contributions."""
+def decumulation_plan(s: Scenario, start_capital: float, expected_real_net_return: float,
+                      gold_real_annual: float | None = None) -> LifecyclePlan:
+    """Plan that starts at the FIRE age with a given capital and no contributions.
+
+    With household accounts the composition at FIRE (main portfolio, IKE,
+    IKZE, PPK, …, metals, and their cost bases) comes from the deterministic
+    accumulation path and is rescaled so that its after-tax value equals
+    ``start_capital``; access ages keep their position relative to FIRE.
+    """
     full = build_plan(s, expected_real_net_return)
     offset = (s.profile.fire_age - s.profile.current_age) * 12
     n = full.n_months - offset
+    initial, accounts = start_capital, None
+    if full.accounts is not None:
+        fee = s.portfolio.management_fee
+        r_m = (1 + ((1 + expected_real_net_return) / (1 - fee) - 1)) ** (1 / 12) - 1
+        g_ann = gold_real_annual if gold_real_annual is not None else s.household.metals.manual_real_return
+        g_m = (1 + g_ann) ** (1 / 12) - 1
+        cap = run_lifecycle(np.full((1, full.n_months), r_m), replace(full, retirement_rule=RetirementRule.FIXED_AGE), s.withdrawal, None,
+                            np.full((1, full.n_months), g_m), capture_month=offset).captured
+        ap = full.accounts
+        scale = start_capital / cap["net"][0] if cap["net"][0] > 0 else 0.0
+        initial = float(cap["v"][0] * scale)
+        accounts = replace(
+            ap,
+            initial=cap["x"][0] * scale if ap.n else ap.initial,
+            basis=cap["bx"][0] * scale if ap.n else ap.basis,
+            contributions=np.zeros((ap.n, n)),
+            access_month=np.maximum(ap.access_month - offset, 0),
+            main_basis=float(cap["basis_v"][0] * scale),
+            main_extra=np.zeros(n),
+        )
     return replace(
         full,
         current_age=s.profile.fire_age,
         n_months=n,
-        initial_capital=start_capital,
+        initial_capital=initial,
         contributions=np.zeros(n),
         events=full.events[offset:],
         other_income=full.other_income[offset:],
@@ -48,6 +75,7 @@ def decumulation_plan(s: Scenario, start_capital: float, expected_real_net_retur
         fire_month=0,
         max_work_month=0,
         coast_targets=None,
+        accounts=accounts,
     )
 
 
@@ -58,9 +86,12 @@ def run_decumulation(
     ws: WithdrawalSettings,
     expected_real_net_return: float,
     income_yield: float | None = None,
+    gold_real_returns: np.ndarray | None = None,
+    gold_real_annual: float | None = None,
 ) -> LifecycleResult:
-    plan = decumulation_plan(s, start_capital, expected_real_net_return)
-    return run_lifecycle(real_returns[:, : plan.n_months], plan, ws, income_yield)
+    plan = decumulation_plan(s, start_capital, expected_real_net_return, gold_real_annual)
+    gold = gold_real_returns[:, : plan.n_months] if gold_real_returns is not None else None
+    return run_lifecycle(real_returns[:, : plan.n_months], plan, ws, income_yield, gold)
 
 
 def strategy_variants(base: WithdrawalSettings, income_available: bool) -> dict[str, WithdrawalSettings]:

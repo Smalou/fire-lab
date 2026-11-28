@@ -55,6 +55,21 @@ def build_markdown(s: Scenario, ctx, proj, mc: dict | None, mc_fresh: bool, bt: 
         lines += ["", f"Oczekiwana stopa (arytm.): {fmt_pct(st_['expected_arithmetic'], 2)}, geometryczna: "
                       f"{fmt_pct(st_['geometric_nominal'], 2)}, zmienność: {fmt_pct(st_['volatility'], 2)}, "
                       f"realna netto: {fmt_pct(st_['geometric_real_net'], 2)}."]
+    hh = s.household
+    if hh.enabled:
+        from core.accounts import KIND_LABELS, OWNER_LABELS
+        lines += ["", "## Majątek i konta", "", "| Konto | Właściciel | Saldo | Wpłata własna / pracodawcy (mies.) |", "|---|---|---|---|"]
+        lines += [f"| {KIND_LABELS[a.kind]} | {OWNER_LABELS[a.owner]} | {fmt_money(a.balance)} | "
+                  f"{fmt_money(a.monthly_own)} / {fmt_money(a.monthly_employer)} |"
+                  for a in hh.accounts if a.enabled and (a.owner == "self" or hh.joint_planning)]
+        if hh.metals.value or hh.metals.monthly_purchase:
+            lines.append(f"| Metale szlachetne | — | {fmt_money(hh.metals.value)} | {fmt_money(hh.metals.monthly_purchase)} / — |")
+        if hh.rental.enabled:
+            lines += ["", f"Dochód z wynajmu netto: {fmt_money(hh.rental.monthly_net)}/mies. (od {hh.rental.start_age} lat)."]
+        lines += ["", "Majątek liczony po podatkach przy wypłacie (Belka, IKZE, OKI, spread kruszców), z wiekiem dostępu "
+                      "do IKE/IKZE/PPK/PPE."]
+        if mc is not None and "p_illiquid_shortfall" in mc["summary"]:
+            lines.append(f"P(luki płynnościowej) w Monte Carlo: {fmt_pct(mc['summary']['p_illiquid_shortfall'], 1)}.")
     if proj is not None:
         lines += ["", "## Plan deterministyczny", "",
                   f"- Wymagany kapitał FIRE: **{fmt_money(proj.target.capital)}**",

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from core.accounts import build_accounts, rental_schedule
 from core.lifecycle import LifecyclePlan, LifecycleResult, run_lifecycle
 from core.models import FireMode, RetirementRule, Scenario, WithdrawalSettings, WithdrawalStrategy
 from core.returns import annual_to_monthly, nominal_to_real
@@ -130,6 +131,7 @@ def build_plan(s: Scenario, expected_real_net_return: float, cash_nominal_rate: 
     target = required_capital(s, expected_real_net_return)
     contrib, _ = contribution_schedule(s, n_months)
     other, barista = income_schedule(s, n_months)
+    other = other + rental_schedule(s, n_months)  # rent counts as income once retired
     fire_month = (prof.fire_age - prof.current_age) * 12
     max_work_month = (max(s.fire.max_work_age, prof.fire_age) - prof.current_age) * 12
     coast = None
@@ -157,6 +159,7 @@ def build_plan(s: Scenario, expected_real_net_return: float, cash_nominal_rate: 
         cash_real_monthly=cash_real_m,
         fee_monthly=float(annual_to_monthly(s.portfolio.management_fee)),
         inflation_annual=prof.inflation,
+        accounts=build_accounts(s, n_months),
     )
 
 
@@ -184,7 +187,11 @@ class DeterministicProjection:
 
 
 def deterministic_projection(
-    s: Scenario, expected_nominal_geometric: float, ws: WithdrawalSettings | None = None, income_yield: float | None = None
+    s: Scenario,
+    expected_nominal_geometric: float,
+    ws: WithdrawalSettings | None = None,
+    income_yield: float | None = None,
+    gold_nominal_geometric: float | None = None,
 ) -> DeterministicProjection:
     """Single path with constant (geometric, i.e. median) return; fees applied by the engine."""
     real = float(nominal_to_real(expected_nominal_geometric, s.profile.inflation))
@@ -193,15 +200,20 @@ def deterministic_projection(
     plan = build_plan(s, real_net)
     r_m = float(annual_to_monthly(real))
     rets = np.full((1, plan.n_months), r_m)
+    gold = None
+    if gold_nominal_geometric is not None:
+        gold = np.full((1, plan.n_months), float(annual_to_monthly(nominal_to_real(gold_nominal_geometric, s.profile.inflation))))
+    elif plan.accounts is not None and plan.accounts.uses_gold.any():
+        gold = np.full((1, plan.n_months), float(annual_to_monthly(s.household.metals.manual_real_return)))
     ws = ws or s.withdrawal
     try:
-        res = run_lifecycle(rets, plan, ws, income_yield)
+        res = run_lifecycle(rets, plan, ws, income_yield, gold, record_buckets=True)
     except ValueError:
         ws = ws.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_REAL})
-        res = run_lifecycle(rets, plan, ws, income_yield)
+        res = run_lifecycle(rets, plan, ws, income_yield, gold, record_buckets=True)
     # FIRE age under "keep accumulating until max work age" – independent of retirement rule
     acc_plan = LifecyclePlan(**{**plan.__dict__, "retirement_rule": RetirementRule.FIXED_AGE, "fire_month": plan.max_work_month})
-    acc = run_lifecycle(rets, acc_plan, ws.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_REAL}))
+    acc = run_lifecycle(rets, acc_plan, ws.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_REAL}), None, gold)
     hit = int(acc.first_hit_month[0])
     fire_age = s.profile.current_age + hit / 12.0 if hit >= 0 else None
     ages = res.ages()

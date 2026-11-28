@@ -23,7 +23,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class FireMode(str, Enum):
@@ -212,6 +212,90 @@ class WithdrawalSettings(_Base):
     withdrawal_tax_rate: float = Field(0.0, ge=0.0, le=0.6)
 
 
+AccountKind = Literal["taxable", "ike", "ikze", "ppk", "ppe", "oki"]
+
+
+class WrapperAccount(_Base):
+    """Investment account of a household member (Polish tax wrappers).
+
+    Amounts are real (today's PLN). ``basis`` is the part of the balance that
+    is paid-in capital (only matters for gains-taxed accounts).
+    """
+
+    enabled: bool = True
+    kind: AccountKind = "ike"
+    owner: Literal["self", "spouse"] = "self"
+    balance: float = Field(0.0, ge=0)
+    basis: float | None = Field(None, ge=0, description="Paid-in capital; None = equal to balance")
+    monthly_own: float = Field(0.0, ge=0, description="Own monthly contribution while working")
+    monthly_employer: float = Field(0.0, ge=0, description="Employer monthly contribution (PPK/PPE)")
+
+
+class PreciousMetals(_Base):
+    """Physical investment metals (bullion, coins), valued with the gold price."""
+
+    value: float = Field(0.0, ge=0)
+    monthly_purchase: float = Field(0.0, ge=0)
+    sale_cost: float = Field(0.04, ge=0.0, le=0.30, description="Bid-ask spread lost when selling")
+    manual_real_return: float = Field(0.01, ge=-0.10, le=0.15, description="Fallback when no gold series is available")
+    manual_volatility: float = Field(0.15, ge=0.0, le=0.60)
+
+
+class RentalIncome(_Base):
+    """Stable rental income (real, i.e. indexed with inflation)."""
+
+    enabled: bool = False
+    monthly_gross: float = Field(0.0, ge=0)
+    vacancy_rate: float = Field(0.05, ge=0.0, le=1.0)
+    monthly_costs: float = Field(0.0, ge=0, description="Maintenance, fees, insurance")
+    tax_rate: float = Field(0.085, ge=0.0, le=0.5, description="Flat-rate tax (ryczałt) on gross received rent")
+    start_age: int = Field(32, ge=0, le=120)
+    end_age: int | None = Field(None, ge=0, le=120)
+    reinvest_share: float = Field(1.0, ge=0.0, le=1.0, description="Share invested while still working")
+
+    @property
+    def monthly_net(self) -> float:
+        received = self.monthly_gross * (1 - self.vacancy_rate)
+        return max(received * (1 - self.tax_rate) - self.monthly_costs, 0.0)
+
+
+class TaxRules(_Base):
+    """Polish tax parameters (editable; defaults valid for 2026)."""
+
+    belka_rate: float = Field(0.19, ge=0.0, le=0.5)
+    ikze_withdrawal_tax: float = Field(0.10, ge=0.0, le=0.5)
+    pit_marginal_rate: float = Field(0.12, ge=0.0, le=0.5, description="For the IKZE contribution deduction")
+    reinvest_ikze_refund: bool = True
+    ike_limit: float = Field(28_260.0, ge=0)
+    ikze_limit: float = Field(11_304.0, ge=0)
+    ikze_limit_self_employed: float = Field(16_956.0, ge=0)
+    ike_access_age: int = Field(60, ge=40, le=80)
+    ikze_access_age: int = Field(65, ge=40, le=80)
+    ppk_access_age: int = Field(60, ge=40, le=80)
+    ppe_access_age: int = Field(60, ge=40, le=80)
+    ppk_state_annual: float = Field(240.0, ge=0)
+    oki_value_tax: float = Field(0.0085, ge=0.0, le=0.05)
+    oki_exempt_threshold: float = Field(100_000.0, ge=0)
+    oki_qualifying_share: float = Field(0.0, ge=0.0, le=1.0, description="Share of OKI assets eligible for the exemption")
+    allow_early_ike: bool = True
+
+
+class HouseholdSettings(_Base):
+    """Household balance sheet beyond the main portfolio (accounts, spouse, metals, rent)."""
+
+    enabled: bool = False
+    joint_planning: bool = False
+    spouse_age: int = Field(32, ge=16, le=100)
+    spouse_self_employed: bool = False
+    self_employed: bool = False
+    main_account_taxable: bool = True
+    main_account_basis_share: float = Field(1.0, ge=0.0, le=1.0, description="Paid-in share of the current main capital")
+    accounts: list[WrapperAccount] = Field(default_factory=list)
+    metals: PreciousMetals = Field(default_factory=PreciousMetals)
+    rental: RentalIncome = Field(default_factory=RentalIncome)
+    taxes: TaxRules = Field(default_factory=TaxRules)
+
+
 class Scenario(_Base):
     schema_version: int = SCHEMA_VERSION
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:10])
@@ -226,6 +310,7 @@ class Scenario(_Base):
     backtest: BacktestSettings = Field(default_factory=BacktestSettings)
     simulation: SimulationSettings = Field(default_factory=SimulationSettings)
     withdrawal: WithdrawalSettings = Field(default_factory=WithdrawalSettings)
+    household: HouseholdSettings = Field(default_factory=HouseholdSettings)
 
     @field_validator("name")
     @classmethod
@@ -258,6 +343,6 @@ class Scenario(_Base):
 RESULT_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "portfolio": ("market", "portfolio"),
     "backtest": ("market", "portfolio", "backtest"),
-    "montecarlo": ("market", "portfolio", "profile", "fire", "simulation", "withdrawal"),
-    "decumulation": ("market", "portfolio", "profile", "fire", "simulation", "withdrawal"),
+    "montecarlo": ("market", "portfolio", "profile", "fire", "simulation", "withdrawal", "household"),
+    "decumulation": ("market", "portfolio", "profile", "fire", "simulation", "withdrawal", "household"),
 }
