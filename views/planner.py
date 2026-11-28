@@ -171,7 +171,8 @@ if not context_guard(ctx):
 # ----------------------------------------------------------------------------- results (committed scenario)
 proj = analytics.deterministic(ctx)
 target = proj.target
-progress = s.profile.initial_capital / target.capital if target.capital > 0 else 1.0
+current = float(proj.table["wealth_real"].iloc[0])  # after-tax, incl. household accounts when enabled
+progress = current / target.capital if target.capital > 0 else 1.0
 years_to = (proj.fire_age - s.profile.current_age) if proj.fire_age is not None else None
 contrib_share = s.profile.monthly_contribution / s.profile.monthly_net_income if s.profile.monthly_net_income else float("nan")
 
@@ -181,7 +182,7 @@ with c1:
     kpi("Wymagany kapitał FIRE", fmt_money(target.capital, compact=True), help=target.explanation, icon=":material/flag:")
 with c2:
     kpi("Stopień realizacji celu", fmt_pct(min(progress, 9.99), 1),
-        delta=f"brakuje {fmt_money(max(target.capital - s.profile.initial_capital, 0), compact=True)}" if progress < 1 else "cel osiągnięty",
+        delta=f"brakuje {fmt_money(max(target.capital - current, 0), compact=True)}" if progress < 1 else "cel osiągnięty",
         delta_color="off", chart=proj.table["wealth_real"].iloc[: s.profile.fire_age - s.profile.current_age + 1].tolist())
 with c3:
     kpi("Prognozowany wiek FIRE", fmt_age(proj.fire_age) if proj.fire_age else "poza horyzontem pracy",
@@ -221,7 +222,7 @@ with left:
         st.dataframe(pd.DataFrame(rows, columns=["Pozycja", "Wartość"]), hide_index=True, width="stretch")  # already formatted
         st.caption("Wartość bieżąca uwzględnia emeryturę i inne dochody oraz skończony horyzont – porównaj z regułą SWR.")
         if s.fire.mode == FireMode.COAST and target.coast_number_today is not None:
-            reached = s.profile.initial_capital >= target.coast_number_today
+            reached = current >= target.coast_number_today
             (st.success if reached else st.info)(
                 f"Kwota Coast FIRE dziś: **{fmt_money(target.coast_number_today)}** – "
                 + ("osiągnięta, wpłaty mogą ustać." if reached else "jeszcze nieosiągnięta."))

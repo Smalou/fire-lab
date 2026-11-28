@@ -18,9 +18,9 @@ from core.backtest import STRATEGY_LABELS, run_backtest
 from core.fire import build_plan, deterministic_projection, required_capital
 from core.lifecycle import deflate_returns, run_lifecycle, summarize
 from core.models import BacktestSettings, RetirementRule, Scenario, WithdrawalStrategy
-from core.returns import nominal_to_real
+from core.returns import arithmetic_to_geometric, nominal_to_real
 from core.risk import var_es
-from core.simulation import ReturnModelSpec, horizon_returns, simulate_portfolio_returns
+from core.simulation import ReturnModelSpec, horizon_returns, simulate_portfolio_returns, simulate_weighted_returns
 from core.withdrawal import run_decumulation, strategy_variants
 from services import catalog
 from services.market_data import (
@@ -35,6 +35,7 @@ from services.market_data import (
 )
 
 SENSITIVITY_PATHS = 1000
+GOLD_IDS = {"demo": "SYN_GOLD", "yfinance": "GLD", "snapshot": "GLD"}
 
 
 @st.cache_data(show_spinner=False, ttl="12h", max_entries=24)
@@ -74,6 +75,8 @@ class Context:
     classes: dict[str, str] = field(default_factory=dict)
     currencies: dict[str, str] = field(default_factory=dict)
     stats: dict[str, float] = field(default_factory=dict)
+    gold: pd.Series | None = None  # monthly nominal gold returns on the estimation window (physical metals)
+    gold_source: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -120,7 +123,46 @@ def get_context(s: Scenario) -> Context:
         return ctx
     ctx.weights = np.asarray(s.portfolio.weights, dtype=float)
     ctx.stats = portfolio_stats(ctx)
+    if needs_gold(s):
+        ctx.gold, ctx.gold_source = _gold_returns(ctx, ds)
+        if ctx.gold is not None:
+            g = ctx.gold.to_numpy(dtype=float)
+            ctx.stats["gold_geometric_nominal"] = float((1 + arithmetic_to_geometric(g.mean(), g.std(ddof=1))) ** 12 - 1)
     return ctx
+
+
+def needs_gold(s: Scenario) -> bool:
+    m = s.household.metals
+    return s.household.enabled and (m.value > 0 or m.monthly_purchase > 0)
+
+
+def _gold_returns(ctx: Context, ds: dict | None) -> tuple[pd.Series | None, str | None]:
+    """Gold price returns aligned with the estimation window (None → manual metals assumptions)."""
+    s = ctx.scenario
+    gid = next((a for a in ctx.assets if ctx.classes.get(a) == "gold"), None)
+    if gid is not None:
+        series = ctx.md.returns[gid]
+    else:
+        src = s.market.data_source
+        if src == "csv":
+            cls = custom_classes() or {}
+            gid = next((c for c, k in cls.items() if k == "gold"), None)
+        else:
+            gid = GOLD_IDS.get(src)
+        if gid is None:
+            return None, None
+        try:
+            md = _load_market(src, (gid,), s.market.base_currency,
+                              ds["prices"] if (src == "csv" and ds) else None, ds["name"] if (src == "csv" and ds) else "")
+        except DataUnavailableError:
+            return None, None
+        if gid not in md.returns.columns:
+            return None, None
+        series = md.returns[gid]
+    aligned = series.reindex(ctx.est_returns.index)
+    if aligned.isna().any():
+        return None, None
+    return aligned, catalog.short_name(gid) if gid in {i.id for i in catalog.instruments()} else gid
 
 
 def portfolio_stats(ctx: Context) -> dict[str, float]:
@@ -154,7 +196,35 @@ def income_yield_or_none(ctx: Context) -> float | None:
 
 
 def deterministic(ctx: Context):
-    return deterministic_projection(ctx.scenario, ctx.stats["geometric_nominal"], income_yield=income_yield_or_none(ctx))
+    return deterministic_projection(ctx.scenario, ctx.stats["geometric_nominal"], income_yield=income_yield_or_none(ctx),
+                                    gold_nominal_geometric=ctx.stats.get("gold_geometric_nominal"))
+
+
+def gold_real_annual(ctx: Context) -> float | None:
+    g = ctx.stats.get("gold_geometric_nominal")
+    return float(nominal_to_real(g, ctx.scenario.profile.inflation)) if g is not None else None
+
+
+def simulate_paths(ctx: Context, spec: ReturnModelSpec, cb=None) -> tuple[np.ndarray, np.ndarray | None]:
+    """Nominal portfolio paths and, when physical metals are held, nominal gold paths from the same scenario."""
+    s = ctx.scenario
+    if not needs_gold(s):
+        return simulate_portfolio_returns(ctx.est_returns, ctx.weights, spec, cb), None
+    if ctx.gold is not None:
+        data = ctx.est_returns.assign(__gold__=ctx.gold.to_numpy())
+        w = np.zeros((2, data.shape[1]))
+        w[0, :-1] = ctx.weights
+        w[1, -1] = 1.0
+        both = simulate_weighted_returns(data, w, spec, cb)
+        return both[:, :, 0], both[:, :, 1]
+    nominal = simulate_portfolio_returns(ctx.est_returns, ctx.weights, spec, cb)
+    m = s.household.metals
+    rng = np.random.default_rng(spec.seed + 7919)
+    mu_m = np.log1p(m.manual_real_return) / 12.0
+    sd_m = m.manual_volatility / np.sqrt(12.0)
+    real_gold = np.expm1(rng.normal(mu_m, sd_m, size=nominal.shape))  # median real growth = manual_real_return
+    infl_m = (1 + s.profile.inflation) ** (1 / 12) - 1
+    return nominal, (1 + real_gold) * (1 + infl_m) - 1
 
 
 def fire_target(ctx: Context):
@@ -216,22 +286,23 @@ def run_monte_carlo(ctx: Context, progress: Callable[[float, str], None] | None 
     plan = build_plan(s, ctx.stats["geometric_real_net"])
     spec = return_spec(s, plan.n_months)
     cb = (lambda f: progress(0.85 * f, f"Generowanie ścieżek stóp zwrotu: {int(f * spec.n_paths)} / {spec.n_paths}")) if progress else None
-    nominal = simulate_portfolio_returns(ctx.est_returns, ctx.weights, spec, cb)
+    nominal, gold_nom = simulate_paths(ctx, spec, cb)
     if progress:
         progress(0.88, "Symulacja przepływów: akumulacja i dekumulacja")
     real = deflate_returns(nominal, s.profile.inflation)
+    gold = deflate_returns(gold_nom, s.profile.inflation) if gold_nom is not None else None
     ws = s.withdrawal
     income = income_yield_or_none(ctx)
     note = None
     if ws.strategy == WithdrawalStrategy.INCOME_ONLY and income is None:
         ws = ws.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_REAL})
         note = "Brak danych o dochodzie portfela – zastosowano stałą realną wypłatę."
-    res = run_lifecycle(real, plan, ws, income)
+    res = run_lifecycle(real, plan, ws, income, gold)
     # accumulation-only run: distribution of the age at which the target is reached
     acc_plan = build_plan(s.model_copy(update={"fire": s.fire.model_copy(update={"retirement_rule": RetirementRule.FIXED_AGE})}),
                           ctx.stats["geometric_real_net"])
     acc_plan.fire_month = acc_plan.max_work_month
-    acc = run_lifecycle(real, acc_plan, ws.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_REAL}))
+    acc = run_lifecycle(real, acc_plan, ws.model_copy(update={"strategy": WithdrawalStrategy.CONSTANT_REAL}), None, gold)
     if progress:
         progress(0.95, "Miary ryzyka: VaR, ES, percentyle")
     summ = summarize(res)
@@ -258,6 +329,8 @@ def run_monte_carlo(ctx: Context, progress: Callable[[float, str], None] | None 
         "var": var,
         "horizon_returns": horizon_returns(nominal, h),
         "nominal_subset": nominal[:SENSITIVITY_PATHS],
+        "gold_nominal_subset": gold_nom[:SENSITIVITY_PATHS] if gold_nom is not None else None,
+        "capped": plan.accounts.capped if plan.accounts is not None else [],
         "target": plan.fire_target,
         "fire_month": plan.fire_month,
         "n_paths": spec.n_paths,
@@ -276,13 +349,14 @@ def run_decumulation_lab(ctx: Context, start_capital: float, progress: Callable[
     n_months = (s.profile.life_horizon_age - s.profile.fire_age) * 12
     spec = return_spec(s, n_months)
     cb = (lambda f: progress(0.7 * f, f"Generowanie ścieżek: {int(f * spec.n_paths)} / {spec.n_paths}")) if progress else None
-    nominal = simulate_portfolio_returns(ctx.est_returns, ctx.weights, spec, cb)
+    nominal, gold_nom = simulate_paths(ctx, spec, cb)
     real = deflate_returns(nominal, s.profile.inflation)
+    gold = deflate_returns(gold_nom, s.profile.inflation) if gold_nom is not None else None
     income = income_yield_or_none(ctx)
     variants = strategy_variants(s.withdrawal, income is not None)
     out = {}
     for i, (label, ws) in enumerate(variants.items()):
-        res = run_decumulation(real, s, start_capital, ws, ctx.stats["geometric_real_net"], income)
+        res = run_decumulation(real, s, start_capital, ws, ctx.stats["geometric_real_net"], income, gold, gold_real_annual(ctx))
         summ = summarize(res)
         depl = np.where(res.depletion_month >= 0, s.profile.fire_age + res.depletion_month / 12.0, np.nan)
         out[label] = {

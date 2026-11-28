@@ -8,10 +8,11 @@ from services.scenarios import ImportErrorPL, clone, default_scenarios, from_jso
 
 def test_defaults_are_valid_and_distinct():
     sc = default_scenarios()
-    assert [s.name for s in sc] == ["Zrównoważony", "Agresywny", "Konserwatywny"]
+    assert [s.name for s in sc] == ["Zrównoważony", "Agresywny", "Konserwatywny", "Rodzina z kontami"]
     for s in sc:
         assert abs(sum(s.portfolio.weights) - 1) < 1e-9
-    assert len({s.id for s in sc}) == 3
+    assert len({s.id for s in sc}) == 4
+    assert sc[3].household.enabled and not sc[0].household.enabled
 
 
 def test_json_roundtrip_preserves_everything():

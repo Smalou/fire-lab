@@ -57,15 +57,32 @@ def simulate_portfolio_returns(
     progress: Callable[[float], None] | None = None,
 ) -> np.ndarray:
     """Return array (n_paths, n_months) of nominal monthly simple portfolio returns."""
+    return simulate_weighted_returns(asset_returns, np.atleast_2d(weights), spec, progress)[:, :, 0]
+
+
+def simulate_weighted_returns(
+    asset_returns: pd.DataFrame,
+    weight_sets: np.ndarray,
+    spec: ReturnModelSpec,
+    progress: Callable[[float], None] | None = None,
+) -> np.ndarray:
+    """Joint simulation of several monthly-rebalanced portfolios on the same asset paths.
+
+    ``weight_sets`` has shape (S, n_assets); returns (n_paths, n_months, S).
+    Used e.g. for the investment portfolio together with physical gold so that
+    both share one correlated scenario. With S = 1 the random stream is the
+    same as for a single portfolio.
+    """
     data = asset_returns.dropna(how="any")
-    w = np.asarray(weights, dtype=float)
-    if data.shape[1] != w.size:
+    w = np.atleast_2d(np.asarray(weight_sets, dtype=float))
+    if data.shape[1] != w.shape[1]:
         raise ValueError("Liczba wag nie odpowiada liczbie aktywów.")
     if len(data) < 24:
         raise ValueError("Do symulacji potrzeba co najmniej 24 miesięcy wspólnej historii aktywów.")
     rng = np.random.default_rng(spec.seed)
     haircut_m = spec.return_haircut / 12.0
-    out = np.empty((spec.n_paths, spec.n_months))
+    s_cnt = w.shape[0]
+    out = np.empty((spec.n_paths, spec.n_months, s_cnt))
 
     if spec.model == SimulationModel.PARAMETRIC:
         logs = np.log1p(data.to_numpy(dtype=float))
@@ -83,13 +100,13 @@ def simulate_portfolio_returns(
         for start in range(0, spec.n_paths, CHUNK):
             n = min(CHUNK, spec.n_paths - start)
             x = _parametric_chunk(rng, n, spec.n_months, mean_log, chol, spec.fat_tails, spec.t_dof)
-            out[start : start + n] = np.expm1(x) @ w
+            out[start : start + n] = np.expm1(x) @ w.T
             if progress:
                 progress((start + n) / spec.n_paths)
     elif spec.model == SimulationModel.BOOTSTRAP:
-        hist = data.to_numpy(dtype=float) @ w  # monthly-rebalanced historical portfolio returns
+        hist = data.to_numpy(dtype=float) @ w.T  # (T, S) monthly-rebalanced historical returns
         hist = np.expm1(np.log1p(hist) - haircut_m)
-        t = hist.size
+        t = hist.shape[0]
         b = max(1, min(spec.block_months, t))
         n_blocks = int(np.ceil(spec.n_months / b))
         for start in range(0, spec.n_paths, CHUNK):

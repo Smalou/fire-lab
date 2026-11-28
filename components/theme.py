@@ -27,6 +27,7 @@ SERIES = ["#0E9F9A", "#1D4E89", "#5B8DD6", "#7A5EA8", "#6FA37A", "#C9A227", "#9A
 ICONS = {
     "home": ":material/space_dashboard:",
     "planner": ":material/flag:",
+    "household": ":material/account_balance:",
     "portfolio": ":material/donut_large:",
     "strategy": ":material/science:",
     "risk": ":material/ssid_chart:",

@@ -29,15 +29,17 @@ if not context_guard(ctx):
 proj = analytics.deterministic(ctx)
 target = proj.target
 mc, mc_fresh, mc_at = state.get_result(s, "montecarlo")
-progress = s.profile.initial_capital / target.capital if target.capital else 1.0
+current = float(proj.table["wealth_real"].iloc[0])  # after-tax, incl. household accounts when enabled
+progress = current / target.capital if target.capital else 1.0
 years_to = proj.fire_age - s.profile.current_age if proj.fire_age is not None else None
 acc_part = proj.table[proj.table["age"] <= s.profile.fire_age]
 
 # ------------------------------------------------------------------ KPIs
 r1 = st.columns(4)
 with r1[0]:
-    kpi("Obecny kapitał", fmt_money(s.profile.initial_capital, compact=True), icon=":material/account_balance_wallet:",
-        delta=f"+{fmt_money(s.profile.monthly_contribution)}/mies.", delta_color="off")
+    kpi("Obecny kapitał" + (" (netto, z kontami)" if s.household.enabled else ""), fmt_money(current, compact=True),
+        icon=":material/account_balance_wallet:", delta=f"+{fmt_money(s.profile.monthly_contribution)}/mies.", delta_color="off",
+        help="Po odliczeniu podatków należnych przy wypłacie; obejmuje IKE, IKZE, PPK, PPE, OKI i kruszce." if s.household.enabled else None)
 with r1[1]:
     kpi("Wymagany kapitał FIRE", fmt_money(target.capital, compact=True), icon=":material/flag:",
         help=f"{MODE_LABELS[s.fire.mode]} · {target.explanation}", delta=f"SWR {fmt_pct(s.fire.swr, 2)}", delta_color="off")

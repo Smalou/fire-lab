@@ -133,3 +133,28 @@ def lines(df: pd.DataFrame, y_title: str, money: bool = False, pct: bool = False
     fig.update_yaxes(title=y_title, **(PLN_AXIS if money else {}), **({"tickformat": ".0%"} if pct else {}))
     fig.update_xaxes(tickformat="%m.%Y")
     return style(fig, height)
+
+
+ACCOUNT_COLORS = {"Portfel główny": TEAL, "Bufor gotówkowy": GREY, "Rachunek maklerski": "#1D4E89", "IKE": "#5B8DD6",
+                  "IKZE": "#7A5EA8", "PPK": "#6FA37A", "PPE": "#3FB8AF", "OKI": "#2E3A59", "Metale szlachetne": "#C9A227"}
+
+
+def wealth_by_account_chart(ages, table: pd.DataFrame, fire_age: int | None = None, access: dict[str, float] | None = None,
+                            height: int = 400) -> go.Figure:
+    """Stacked after-tax real wealth per account; vertical markers for FIRE and wrapper access ages."""
+    fig = go.Figure()
+    for i, col in enumerate(table.columns):
+        base = col.split(" · ")[0]
+        color = ACCOUNT_COLORS.get(base, SERIES[i % len(SERIES)])
+        dash_owner = " · Małżonek" in col
+        fig.add_trace(go.Scatter(x=ages, y=table[col], name=col, stackgroup="w", mode="lines",
+                                 line=dict(width=0.5, color=color, dash="dot" if dash_owner else "solid"),
+                                 fillcolor=hex_to_rgba(color, 0.45 if dash_owner else 0.75), hovertemplate="%{y:,.0f} zł"))
+    if fire_age is not None:
+        fig.add_vline(x=fire_age, line=dict(color=ORANGE, width=2, dash="dash"), annotation_text="FIRE",
+                      annotation_font_color=ORANGE, annotation_position="top")
+    for age in sorted(set((access or {}).values())):
+        fig.add_vline(x=age, line=dict(color=GREY, width=1, dash="dot"))
+    fig.update_xaxes(title="Wiek")
+    fig.update_yaxes(title="PLN po podatkach (ceny stałe)", **PLN_AXIS)
+    return style(fig, height)

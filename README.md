@@ -40,12 +40,13 @@ Gdy historia danych jest za krótka, aplikacja to zgłasza, proponuje krótszy o
 
 1. **Centrum dowodzenia:** kluczowe wskaźniki, ścieżka akumulacji, struktura portfela, czynniki ryzyka i raport (Markdown/HTML).
 2. **Planer FIRE:** 5 trybów (Traditional, Lean, Fat, Coast, Barista), z których każdy liczy cel inaczej, reguła przejścia na FIRE, zdarzenia finansowe i dodatkowe dochody.
-3. **Konstruktor portfela:** Markowitz (min. wariancja, maks. Sharpe, docelowa stopa), Risk Parity, granica efektywna, CML, wkłady do ryzyka, CAPM/SML. Wybrany portfel można zaznaczyć na wykresie i zastosować w scenariuszu.
-4. **Laboratorium strategii:** backtest walk-forward 8 strategii z wpłatami, kosztami i rebalancingiem. Liczy TWR, XIRR, CAGR, Sharpe, Sortino, maks. obsunięcie, betę, alfę, tracking error i IR.
-5. **Laboratorium ryzyka:** Monte Carlo całego cyklu (100–10 000 ścieżek), model parametryczny (normalny lub t-Studenta, opcjonalnie Ledoit–Wolf) albo block bootstrap, VaR/ES, wykres wachlarzowy, rozkłady, mapa sukcesu, wrażliwość i scenariusze kryzysowe.
-6. **Życie po FIRE:** strategie wypłat (stała realna z regułą 4% jako przypadkiem szczególnym, stały %, Guardrails, tylko dochód), podatek, dochody i eksperyment z ryzykiem sekwencji stóp zwrotu.
-7. **Porównywarka scenariuszy:** tworzenie, klonowanie i usuwanie scenariuszy, import i eksport JSON, porównanie wyników.
-8. **Metodologia:** wzory (`st.latex`), założenia i literatura.
+3. **Majątek i konta:** majątek gospodarstwa domowego poza portfelem głównym, czyli małżonek, IKE, IKZE, PPK, PPE, OKI, rachunki opodatkowane, kruszce fizyczne i dochód z wynajmu. Aplikacja uwzględnia wiek dostępu, polskie podatki (Belka od nominalnego zysku, 10% IKZE, podatek od wartości OKI) i limity wpłat na 2026 rok. Pokazuje majątek po podatkach według kont i ryzyko luki płynnościowej przed 60. i 65. rokiem życia.
+4. **Konstruktor portfela:** Markowitz (min. wariancja, maks. Sharpe, docelowa stopa), Risk Parity, granica efektywna, CML, wkłady do ryzyka, CAPM/SML. Wybrany portfel można zaznaczyć na wykresie i zastosować w scenariuszu.
+5. **Laboratorium strategii:** backtest walk-forward 8 strategii z wpłatami, kosztami i rebalancingiem. Liczy TWR, XIRR, CAGR, Sharpe, Sortino, maks. obsunięcie, betę, alfę, tracking error i IR.
+6. **Laboratorium ryzyka:** Monte Carlo całego cyklu (100–10 000 ścieżek), model parametryczny (normalny lub t-Studenta, opcjonalnie Ledoit–Wolf) albo block bootstrap, VaR/ES, wykres wachlarzowy, rozkłady, mapa sukcesu, wrażliwość i scenariusze kryzysowe.
+7. **Życie po FIRE:** strategie wypłat (stała realna z regułą 4% jako przypadkiem szczególnym, stały %, Guardrails, tylko dochód), podatek, dochody i eksperyment z ryzykiem sekwencji stóp zwrotu.
+8. **Porównywarka scenariuszy:** tworzenie, klonowanie i usuwanie scenariuszy, import i eksport JSON, porównanie wyników.
+9. **Metodologia:** wzory (`st.latex`), założenia i literatura.
 
 ## Struktura projektu
 
@@ -85,5 +86,6 @@ Szczegółowe decyzje projektowe i metodologiczne są opisane w [PLAN.md](PLAN.m
 - **Model zwrotów:** parametryczny Monte Carlo zakłada stałe w czasie średnie i kowariancje (bez zmiany reżimów). Block bootstrap powtarza tylko historię z okresu estymacji.
 - **Guardrails** to uproszczona wersja reguł Guytona–Klingera.
 - **Formaty liczb:** pola `number_input` Streamlit zawsze pokazują kropkę dziesiętną, a paski postępu w tabelach (`ProgressColumn`) formatują procenty według języka przeglądarki. Pozostałe liczby (tabele, wykresy, wskaźniki) są formatowane po polsku. W edytorach puste komórki są oznaczane przez Streamlit jako „None”.
+- **Konta i podatki:** wszystkie konta poza kruszcami inwestują w ten sam portfel. Składka pracodawcy do PPK i PPE nie zwiększa PIT. Limity IKE i IKZE oraz kwota wolna OKI są stałe realnie. Oboje małżonkowie przechodzą na FIRE jednocześnie. Wcześniejsza wypłata z IKZE i PPK nie jest modelowana. Wartość nieruchomości na wynajem nie wlicza się do kapitału FIRE. Stan prawny: 2026 (OKI od 1.01.2027).
 - **Przechowywanie:** scenariusze są trzymane tylko w sesji przeglądarki. Aby je zachować, trzeba je wyeksportować do JSON.
 - **Optymalizacja** (SLSQP) może nie zbiec przy skrajnych ograniczeniach. Status jest wtedy zgłaszany, a wyniki nie są ukrywane.
