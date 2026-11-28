@@ -12,7 +12,7 @@ Interfejs jest w całości po polsku (formaty liczb, dat i waluty, domyślnie PL
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
 Testy (jednostkowe i AppTest dla wszystkich stron):

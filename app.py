@@ -5,10 +5,22 @@ Run with:  streamlit run app.py
 
 from __future__ import annotations
 
+import sys
+
 import streamlit as st
 
-from components.theme import ICONS
-from services import state
+MIN_STREAMLIT = (1, 67)
+_st_version = tuple(int(x) for x in st.__version__.split(".")[:2] if x.isdigit())
+if _st_version < MIN_STREAMLIT:
+    st.error(
+        f"FIRE Lab wymaga Streamlit ≥ {'.'.join(map(str, MIN_STREAMLIT))}, a uruchomiono wersję {st.__version__} "
+        f"(Python: `{sys.executable}`). Aktywuj środowisko projektu, zainstaluj zależności "
+        "(`pip install -r requirements.txt`) i uruchom aplikację poleceniem `python -m streamlit run app.py`."
+    )
+    st.stop()
+
+from components.theme import ICONS  # noqa: E402
+from services import state  # noqa: E402
 
 st.set_page_config(
     page_title="FIRE Lab – od akumulacji do niezależności finansowej",
