@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -8,6 +9,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolated_database(tmp_path_factory):
+    """Never touch data/fire_lab.db from tests."""
+    os.environ["FIRE_LAB_DB"] = str(tmp_path_factory.mktemp("db") / "fire_lab_test.db")
+    yield
 
 
 @pytest.fixture

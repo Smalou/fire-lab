@@ -44,6 +44,9 @@ pages = {
     "Wiedza": [
         st.Page("views/methodology.py", title="Metodologia", icon=ICONS["methodology"], url_path="metodologia"),
     ],
+    "Konto": [
+        st.Page("views/profile.py", title="Profil i dane", icon=ICONS["profile"], url_path="profil"),
+    ],
 }
 nav = st.navigation(pages, position="sidebar")
 

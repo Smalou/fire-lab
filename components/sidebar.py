@@ -9,7 +9,7 @@ import streamlit as st
 
 from components.formatting import fmt_datetime
 from components.theme import ICONS
-from services import catalog, state
+from services import auth, catalog, state
 from services.analytics import clear_market_cache
 from services.market_data import DataUnavailableError, parse_price_csv, snapshot_available
 from services.scenarios import remap_portfolio_to_source
@@ -105,16 +105,96 @@ def _csv_import() -> None:
                                                                              format_func=labels.get, required=True)},
         )
         if st.button("Wczytaj dane z pliku", icon=ICONS["upload"]):
-            st.session_state["csv_dataset"] = {
-                "name": up.name,
-                "prices": prices,
-                "classes": dict(zip(edited["Kolumna"], edited["Klasa aktywów"])),
-            }
+            classes = dict(zip(edited["Kolumna"], edited["Klasa aktywów"]))
+            st.session_state["csv_dataset"] = {"name": up.name, "prices": prices, "classes": classes}
+            ds_id = state.store_dataset(up.name, up.getvalue(), classes)
+            if ds_id is not None:
+                st.session_state["csv_dataset"]["db_id"] = ds_id
             clear_market_cache()
-            st.toast(f"Wczytano {prices.shape[1]} serii, {len(prices)} miesięcy.", icon=":material/check_circle:")
+            saved = " Plik zapisano w Twoim profilu." if ds_id is not None else ""
+            st.toast(f"Wczytano {prices.shape[1]} serii, {len(prices)} miesięcy.{saved}", icon=":material/check_circle:")
+    _stored_datasets()
     ds = st.session_state.get("csv_dataset")
     if ds:
         st.caption(f"Aktualnie wczytany plik: **{ds['name']}** ({ds['prices'].shape[1]} serii).")
+
+
+def _stored_datasets() -> None:
+    u = state.user()
+    if not u.persisted:
+        return
+    stored = auth.database().list_datasets(u.id)
+    if not stored:
+        return
+    by_id = {d.id: d for d in stored}
+    current = (st.session_state.get("csv_dataset") or {}).get("db_id")
+    ids = list(by_id)
+    pick = st.selectbox("Albo wybierz plik zapisany w profilu", ids, index=ids.index(current) if current in by_id else None,
+                        format_func=lambda i: f"{by_id[i].name} ({fmt_datetime(pd.Timestamp(by_id[i].created_at))})",
+                        placeholder="Wybierz zapisany plik", key="ui_csv_stored")
+    if pick is not None and pick != current and st.button("Użyj zapisanego pliku", icon=ICONS["upload"]):
+        try:
+            state.activate_dataset(by_id[pick])
+        except DataUnavailableError as exc:
+            st.error(str(exc))
+            return
+        clear_market_cache()
+        st.toast(f"Wczytano zapisany plik „{by_id[pick].name}”.", icon=":material/check_circle:")
+
+
+def _reset_scenario_widgets() -> None:
+    for key in [k for k in st.session_state if str(k).startswith(("ui_sc_", "ui_active_scenario", "ui_csv"))]:
+        del st.session_state[key]
+
+
+def _on_profile_change() -> None:
+    auth.switch_local_profile(st.session_state["ui_local_profile"])
+    _reset_scenario_widgets()
+    state.reload()
+
+
+@st.dialog("Nowy profil lokalny", icon=":material/person_add:")
+def new_profile_dialog() -> None:
+    with st.form("new_profile_form", border=False):
+        name = st.text_input("Nazwa profilu", max_chars=60, placeholder="np. Sylwia – plan główny")
+        st.caption("Profil lokalny oddziela scenariusze i pliki danych, ale nie jest chroniony hasłem.")
+        if st.form_submit_button("Utwórz i przełącz", type="primary", icon=":material/person_add:"):
+            try:
+                uid = auth.create_local_profile(name)
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+            auth.switch_local_profile(uid)
+            _reset_scenario_widgets()
+            state.reload()
+            st.rerun()
+
+
+def _account() -> None:
+    u = state.user()
+    if auth.mode() == "google":
+        blocked = auth.blocked_email()
+        if u.persisted:
+            st.caption(f":material/account_circle: **{u.display_name}**  \n{u.email or ''}")
+            st.button("Wyloguj", icon=":material/logout:", on_click=st.logout, key="ui_logout")
+        elif blocked:
+            st.warning(f"Konto {blocked} nie ma dostępu do zapisu danych w tej aplikacji.", icon=":material/block:")
+            st.button("Wyloguj", icon=":material/logout:", on_click=st.logout, key="ui_logout")
+        else:
+            st.button("Zaloguj przez Google", icon=":material/login:", type="primary", on_click=st.login, args=("google",),
+                      key="ui_login", width="stretch")
+            st.caption("Pracujesz jako gość – scenariusze nie są zapisywane. Przed zalogowaniem wyeksportuj je do JSON, "
+                       "jeżeli chcesz je zachować.")
+        return
+    profiles = auth.local_profiles()
+    by_id = {p.id: p for p in profiles}
+    ids = list(by_id)
+    with st.container(horizontal=True, gap="small", vertical_alignment="bottom"):
+        st.selectbox("Profil", ids, index=ids.index(u.id) if u.id in by_id else 0, format_func=lambda i: by_id[i].display_name,
+                     key="ui_local_profile", on_change=_on_profile_change,
+                     help="Profile lokalne (bez logowania). Każdy ma własne scenariusze, ustawienia i pliki danych.")
+        if st.button("", icon=":material/person_add:", help="Nowy profil lokalny", key="ui_new_profile"):
+            new_profile_dialog()
 
 
 def render_sidebar() -> None:
@@ -123,6 +203,9 @@ def render_sidebar() -> None:
     with st.sidebar:
         st.markdown("### :material/local_fire_department: FIRE Lab")
         st.caption("Od akumulacji do niezależności finansowej.")
+        _account()
+        for w in st.session_state.get(state.LOAD_WARNINGS, []):
+            st.warning(w, icon=":material/warning:")
         ids = list(sc)
         st.selectbox("Aktywny scenariusz", ids, index=ids.index(s.id), format_func=lambda i: sc[i].name,
                      key="ui_active_scenario", on_change=_on_scenario_change,
@@ -141,7 +224,10 @@ def render_sidebar() -> None:
         if st.session_state.get("data_refreshed_at") is not None:
             st.caption(f"Ostatnie ręczne odświeżenie: {fmt_datetime(st.session_state['data_refreshed_at'])}")
         st.divider()
-        st.caption(
-            ":material/info: Scenariusze są przechowywane wyłącznie w bieżącej sesji przeglądarki i mogą zostać utracone "
-            "po jej zamknięciu. Eksportuj je do JSON na stronie Porównywarki scenariuszy."
-        )
+        if state.user().persisted:
+            st.caption(":material/cloud_done: Scenariusze i ustawienia zapisują się automatycznie w bazie danych Twojego profilu.")
+        else:
+            st.caption(
+                ":material/info: Jako gość masz scenariusze tylko w bieżącej sesji przeglądarki – mogą zostać utracone "
+                "po jej zamknięciu. Zaloguj się albo eksportuj je do JSON na stronie Porównywarki scenariuszy."
+            )

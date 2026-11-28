@@ -7,7 +7,7 @@ from streamlit.testing.v1 import AppTest
 
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
 PAGES = ["views/command_center.py", "views/planner.py", "views/portfolio_builder.py", "views/strategy_lab.py",
-         "views/risk_lab.py", "views/post_fire.py", "views/scenarios.py", "views/methodology.py"]
+         "views/risk_lab.py", "views/post_fire.py", "views/scenarios.py", "views/methodology.py", "views/profile.py"]
 
 
 def _click(at: AppTest, label: str) -> AppTest:
