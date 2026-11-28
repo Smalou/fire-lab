@@ -19,9 +19,12 @@ from services.scenarios import ImportErrorPL, clone, default_scenarios, from_jso
 
 state.init()
 page_header("Porównywarka scenariuszy", "Twórz, zapisuj i porównuj warianty planu: szybciej do FIRE czy bezpieczniej po FIRE?")
-st.warning("Scenariusze są przechowywane wyłącznie w pamięci bieżącej sesji (brak trwałej bazy danych) i mogą zostać utracone "
-           "po zamknięciu karty lub restarcie aplikacji. Eksportuj je do pliku JSON, aby móc je odtworzyć.",
-           icon=":material/save:")
+if state.user().persisted:
+    st.caption(f":material/cloud_done: Scenariusze profilu **{state.user().display_name}** zapisują się automatycznie w bazie danych.")
+else:
+    st.warning("Pracujesz jako gość: scenariusze są przechowywane wyłącznie w pamięci bieżącej sesji i mogą zostać utracone "
+               "po zamknięciu karty lub restarcie aplikacji. Zaloguj się albo eksportuj je do pliku JSON.",
+               icon=":material/save:")
 
 sc = state.scenarios()
 active = state.active()
@@ -100,7 +103,7 @@ def edit_dialog(sid: str) -> None:
 
 @st.dialog("Usuń scenariusz", icon=":material/delete:")
 def delete_dialog(sid: str) -> None:
-    st.markdown(f"Czy na pewno usunąć scenariusz **{sc[sid].name}**? Tej operacji nie można cofnąć (chyba że masz eksport JSON).")
+    st.markdown(f"Czy na pewno usunąć scenariusz **{sc[sid].name}**? Scenariusz zostanie usunięty także z bazy danych – tej operacji nie można cofnąć (chyba że masz eksport JSON).")
     c1, c2 = st.columns(2)
     if c1.button("Usuń", type="primary", icon=":material/delete:"):
         if state.delete(sid):

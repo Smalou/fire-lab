@@ -23,6 +23,26 @@ pytest -q
 
 Wymagany Python 3.11 lub nowszy. Aplikacja była testowana na Pythonie 3.13 i Streamlit 1.67.
 
+## Baza danych i profile użytkowników
+
+Scenariusze, ustawienia profilu (aktywny scenariusz, aktywny plik danych) i wczytane pliki CSV zapisują się automatycznie w bazie **SQLite** `data/fire_lab.db` (inna lokalizacja: zmienna `FIRE_LAB_DB`). Plik bazy nie trafia do repozytorium. Wyniki analiz nie są zapisywane, bo liczą się ponownie z zapisanych ustawień.
+
+| Tabela | Zawartość |
+|---|---|
+| `users` | profil: dostawca (`google` / `local`), identyfikator (`sub` z Google albo nazwa profilu lokalnego), e-mail, nazwa, zdjęcie, daty |
+| `user_settings` | ustawienia profilu jako para klucz → JSON |
+| `scenarios` | scenariusz jako dokument JSON modelu `Scenario` + `schema_version`, nazwa, kolejność, daty |
+| `datasets` | wczytane pliki CSV (oryginalne bajty + przypisanie klas aktywów), bez duplikatów (SHA-256) |
+
+Nowe pola dodane do modelu scenariusza z wartościami domyślnymi nie wymagają migracji bazy: starsze dokumenty wczytają się z wartościami domyślnymi. Zmiana nazwy lub znaczenia pola wymaga podbicia `SCHEMA_VERSION` w `core/models.py` i dopisania funkcji w `services/persistence.py` (`UPGRADERS`). Scenariusz, którego nie da się wczytać, zostaje w bazie, a aplikacja pokazuje ostrzeżenie zamiast błędu.
+
+**Tryby logowania:**
+
+- **Bez konfiguracji (domyślnie, na własnym komputerze):** profile lokalne bez hasła, wybierane w panelu bocznym. Oddzielają dane, ale ich nie chronią.
+- **Google:** skopiuj `.streamlit/secrets.example.toml` do `.streamlit/secrets.toml` i uzupełnij. W [Google Cloud Console](https://console.cloud.google.com/apis/credentials) utwórz *OAuth client ID* typu *Web application*, a jako *Authorized redirect URI* dodaj `http://localhost:8501/oauth2callback` (i adres wdrożonej aplikacji z `/oauth2callback`). Zalogowani użytkownicy mają własne dane, niezalogowani pracują jako goście (tylko sesja). Lista `allowed_emails` ogranicza, kto może zapisywać dane.
+
+Strona **Profil i dane** pokazuje, co jest zapisane, pozwala pobrać wszystkie dane (JSON), usunąć zapisane pliki albo cały profil.
+
 ## Źródła danych
 
 Źródło wybiera się w panelu bocznym (przycisk **Dane**). Każda strona pokazuje źródło, datę aktualizacji i okres analizy.
@@ -46,12 +66,13 @@ Gdy historia danych jest za krótka, aplikacja to zgłasza, proponuje krótszy o
 6. **Życie po FIRE:** strategie wypłat (stała realna z regułą 4% jako przypadkiem szczególnym, stały %, Guardrails, tylko dochód), podatek, dochody i eksperyment z ryzykiem sekwencji stóp zwrotu.
 7. **Porównywarka scenariuszy:** tworzenie, klonowanie i usuwanie scenariuszy, import i eksport JSON, porównanie wyników.
 8. **Metodologia:** wzory (`st.latex`), założenia i literatura.
+9. **Profil i dane:** konto (Google lub profil lokalny), zapisane pliki, eksport i usunięcie danych.
 
 ## Struktura projektu
 
 ```
 app.py                  nawigacja, ustawienia strony, panel boczny
-views/                  8 stron Streamlit (tylko UI)
+views/                  9 stron Streamlit (tylko UI)
 core/                   obliczenia, niezależne od Streamlit
   models.py             centralny model scenariusza (pydantic) + zależności wyników
   returns.py, metrics.py
@@ -59,6 +80,9 @@ core/                   obliczenia, niezależne od Streamlit
   fire.py, lifecycle.py wspólny silnik akumulacja → FIRE → wypłaty
   withdrawal.py, sequence.py, simulation.py, risk.py, backtest.py
 services/               dane (yfinance/CSV/demo), stan sesji, cache, raporty
+  db.py                 SQLite: schemat, migracje, repozytorium (bez Streamlit)
+  persistence.py        zapis/odczyt scenariuszy z bazy, aktualizacja wersji schematu
+  auth.py               logowanie Google (st.login) i profile lokalne
 components/             formatowanie PL, motyw, KPI, wykresy, panel boczny
 data/                   katalog instrumentów, dane demo, migawka
 scripts/                generowanie danych demo, pobieranie migawki
@@ -85,5 +109,5 @@ Szczegółowe decyzje projektowe i metodologiczne są opisane w [PLAN.md](PLAN.m
 - **Model zwrotów:** parametryczny Monte Carlo zakłada stałe w czasie średnie i kowariancje (bez zmiany reżimów). Block bootstrap powtarza tylko historię z okresu estymacji.
 - **Guardrails** to uproszczona wersja reguł Guytona–Klingera.
 - **Formaty liczb:** pola `number_input` Streamlit zawsze pokazują kropkę dziesiętną, a paski postępu w tabelach (`ProgressColumn`) formatują procenty według języka przeglądarki. Pozostałe liczby (tabele, wykresy, wskaźniki) są formatowane po polsku. W edytorach puste komórki są oznaczane przez Streamlit jako „None”.
-- **Przechowywanie:** scenariusze są trzymane tylko w sesji przeglądarki. Aby je zachować, trzeba je wyeksportować do JSON.
+- **Przechowywanie:** SQLite to jeden plik na serwerze aplikacji. Na hostingu z ulotnym dyskiem (np. Streamlit Community Cloud) baza znika przy restarcie, więc przy wdrożeniu potrzebny jest trwały dysk albo zewnętrzna baza. Goście (tryb Google bez logowania) mają scenariusze tylko w sesji, a logowanie zaczyna nową sesję, więc scenariusze gościa trzeba przed zalogowaniem wyeksportować do JSON.
 - **Optymalizacja** (SLSQP) może nie zbiec przy skrajnych ograniczeniach. Status jest wtedy zgłaszany, a wyniki nie są ukrywane.

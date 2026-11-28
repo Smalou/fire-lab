@@ -33,6 +33,7 @@ ICONS = {
     "post_fire": ":material/beach_access:",
     "scenarios": ":material/compare_arrows:",
     "methodology": ":material/menu_book:",
+    "profile": ":material/account_circle:",
     "save": ":material/save:",
     "run": ":material/play_arrow:",
     "download": ":material/download:",
